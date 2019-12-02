@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+if test "$0" != containers/run; then
+	printf 'Unexpected working directory.\n' >&2
+	exit 1
+fi
+
+. containers/common.sh
+
+mkdir -p \
+	containers/mounts/run/iptooled
+
+exec_docker \
+	--network=none \
+	--mount "type=bind,ro,$(expand_src target/debug/iptooled),dst=/build/target/debug/iptooled" \
+	--mount "type=bind,$(expand_src containers/mounts/run/iptooled),dst=/run/iptooled" \
+	--workdir /build \
+	alpine:3.10 target/debug/iptooled "$@"

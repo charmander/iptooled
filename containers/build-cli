@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+if test "$0" != containers/build-cli; then
+	printf 'Unexpected working directory.\n' >&2
+	exit 1
+fi
+
+. containers/common.sh
+
+mkdir -p \
+	containers/mounts/cargo-registry \
+	target
+touch -a Cargo.lock
+
+exec_docker \
+	--mount "type=bind,$(expand_src containers/mounts/cargo-registry),dst=/usr/local/cargo/registry" \
+	--mount "type=bind,ro,$(expand_src src),dst=/build/src" \
+	--mount "type=bind,ro,$(expand_src Cargo.toml),dst=/build/Cargo.toml" \
+	--mount "type=bind,$(expand_src Cargo.lock),dst=/build/Cargo.lock" \
+	--mount "type=bind,$(expand_src target),dst=/build/target" \
+	--workdir /build \
+	rust:1.39-alpine "$@"

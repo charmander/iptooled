@@ -1,0 +1,10 @@
+[package]
+name = 'iptooled'
+version = '0.1.0'
+
+edition = '2018'
+
+repository = 'https://github.com/charmander/iptooled'
+
+[dependencies]
+tokio = '0.2.2'
