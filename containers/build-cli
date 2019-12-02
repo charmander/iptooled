@@ -20,4 +20,4 @@ exec_docker \
 	--mount "type=bind,$(expand_src Cargo.lock),dst=/build/Cargo.lock" \
 	--mount "type=bind,$(expand_src target),dst=/build/target" \
 	--workdir /build \
-	rust:1.39-alpine "$@"
+	rustlang/rust:nightly-alpine3.10 "$@"

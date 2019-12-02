@@ -12,6 +12,7 @@ mkdir -p \
 	containers/mounts/run/iptooled
 
 exec_docker \
+	--runtime=runc \
 	--network=none \
 	--mount "type=bind,ro,$(expand_src target/debug/iptooled),dst=/build/target/debug/iptooled" \
 	--mount "type=bind,$(expand_src containers/mounts/run/iptooled),dst=/run/iptooled" \

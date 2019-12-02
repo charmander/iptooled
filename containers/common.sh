@@ -12,5 +12,6 @@ exec_docker() {
 		--security-opt=no-new-privileges \
 		--user="$UID:$(id -g)" \
 		--read-only \
+		--init \
 		"$@"
 }

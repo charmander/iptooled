@@ -25,6 +25,6 @@ A request’s type is identified by its first byte.
 
 - [2, *address*×*address-bytes*]
 
-	Marks an address as untrusted. The response is [0] for success, [1] for failure.
+	Marks an address as spam. The response is [0] for success, [1] for failure.
 
 It’s okay to send multiple requests without waiting for a response; the responses will come back in order.

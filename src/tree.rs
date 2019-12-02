@@ -57,6 +57,14 @@ pub struct AddressTree {
 }
 
 impl AddressTree {
+	pub fn new() -> Self {
+		Self {
+			children: Default::default(),
+			trusted_count: 0,
+			spam_count: 0,
+		}
+	}
+
 	pub fn query(&self, address: Address) -> QueryResult {
 		let mut current = self;
 		let mut prefix_bits = 0;
@@ -79,7 +87,7 @@ impl AddressTree {
 		}
 	}
 
-	fn mark_path_trusted(&mut self, mut path: impl Iterator<Item = u8>) {
+	fn record_trusted_path(&mut self, mut path: impl Iterator<Item = u8>) {
 		self.trusted_count += 1;
 
 		if self.spam_count == 0 {
@@ -88,30 +96,26 @@ impl AddressTree {
 
 		if let Some(next) = path.next() {
 			if let Some(child) = &mut self.children[usize::from(next)] {
-				child.mark_path_trusted(path);
+				child.record_trusted_path(path);
 			}
 		}
 	}
 
-	pub fn mark_trusted(&mut self, address: Address) {
-		self.mark_path_trusted(AddressPath::new(address));
+	pub fn record_trusted(&mut self, address: Address) {
+		self.record_trusted_path(AddressPath::new(address));
 	}
 
-	fn mark_path_spam(&mut self, mut path: impl Iterator<Item = u8>) {
+	fn record_spam_path(&mut self, mut path: impl Iterator<Item = u8>) {
 		self.spam_count += 1;
 
 		if let Some(next) = path.next() {
 			self.children[usize::from(next)].get_or_insert_with(|| {
-				Box::new(AddressTree {
-					children: Default::default(),
-					trusted_count: 0,
-					spam_count: 0,
-				})
-			}).mark_path_spam(path);
+				Box::new(AddressTree::new())
+			}).record_spam_path(path);
 		}
 	}
 
-	pub fn mark_spam(&mut self, address: Address) {
-		self.mark_path_spam(AddressPath::new(address));
+	pub fn record_spam(&mut self, address: Address) {
+		self.record_spam_path(AddressPath::new(address));
 	}
 }
