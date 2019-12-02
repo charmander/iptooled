@@ -11,5 +11,6 @@ version = '0.2.2'
 features = [
 	'io-util',
 	'rt-core',
+	'rt-util',
 	'uds',
 ]

@@ -11,8 +11,8 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::Arc;
-use tokio::io::{self, AsyncReadExt};
+use std::rc::Rc;
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::runtime;
 use tokio::task;
@@ -79,12 +79,12 @@ async fn read_request(mut source: impl io::AsyncRead + Unpin) -> Result<Request,
 }
 
 async fn async_main(socket_path: &OsStr) -> Result<(), Box<dyn Error>> {
-	let tree = Arc::new(AddressTree::new());
+	let tree = Rc::new(AddressTree::new());
 	let mut listener = UnixListener::bind(Path::new(socket_path))?;
 
 	loop {
 		let mut tree = tree.clone();
-		let client =
+		let mut client =
 			match listener.accept().await {
 				Err(err) => {
 					eprintln!("accept failed: {}", err);
@@ -96,27 +96,33 @@ async fn async_main(socket_path: &OsStr) -> Result<(), Box<dyn Error>> {
 				}
 			};
 
-		task::spawn(async move {
-			let request =
-				match read_request(client).await {
-					Ok(request) => request,
-					Err(err) => {
-						eprintln!("request read failed: {}", err);
-						return;  // TODO: dropping the socket seems to close it, but is that reliable?
-					},
-				};
+		task::spawn_local(async move {
+			let err: Result<!, ReadError> = try {
+				loop {
+					match read_request(&mut client).await? {
+						Request::Query(address) => {
+							let query_result = tree.query(address);
 
-			match request {
-				Request::Query(address) => {
-					tree.query(address);
+							client.write(&[
+								&query_result.trusted_count.to_be_bytes()[..],
+								&query_result.spam_count.to_be_bytes()[..],
+								&[query_result.prefix_bits][..],
+							].concat()).await?;
+						}
+						Request::Trust(address) => {
+							Rc::get_mut(&mut tree).unwrap().record_trusted(address);
+							client.write(&[0]).await?;
+						}
+						Request::Spam(address) => {
+							Rc::get_mut(&mut tree).unwrap().record_spam(address);
+							client.write(&[0]).await?;
+						}
+					}
 				}
-				Request::Trust(address) => {
-					Arc::get_mut(&mut tree).unwrap().record_trusted(address);
-				}
-				Request::Spam(address) => {
-					Arc::get_mut(&mut tree).unwrap().record_spam(address);
-				}
-			}
+			};
+
+			eprintln!("client error: {}", err.err().unwrap());
+			// TODO: dropping the socket seems to close it, but is that reliable?
 		});
 	}
 }
