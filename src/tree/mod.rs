@@ -1,7 +1,7 @@
-pub const ADDRESS_BYTES: usize = 16;
+mod node_index;
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Address(pub [u8; ADDRESS_BYTES]);
+use super::address::Address;
+use self::node_index::{AddressPath, NodeIndex, NodeArray};
 
 #[derive(Clone, Debug)]
 pub struct QueryResult {
@@ -10,48 +10,9 @@ pub struct QueryResult {
 	pub prefix_bits: u8,
 }
 
-struct AddressPath {
-	address: Address,
-	path_index: usize,
-}
-
-impl AddressPath {
-	fn new(address: Address) -> Self {
-		Self {
-			address,
-			path_index: 0,
-		}
-	}
-}
-
-impl Iterator for AddressPath {
-	type Item = u8;
-
-	fn next(&mut self) -> Option<Self::Item> {
-		let address_index = self.path_index / 2;
-		let low = self.path_index % 2 == 1;
-
-		if address_index == self.address.0.len() {
-			return None;
-		}
-
-		let byte = self.address.0[address_index];
-
-		self.path_index += 1;
-
-		Some(
-			if low {
-				byte & 0xf
-			} else {
-				byte >> 4
-			}
-		)
-	}
-}
-
 #[derive(Clone, Debug)]
 pub struct AddressTree {
-	children: [Option<Box<AddressTree>>; 16],
+	children: NodeArray<Option<Box<AddressTree>>>,
 	trusted_count: u32,
 	spam_count: u32,
 }
@@ -70,7 +31,7 @@ impl AddressTree {
 		let mut prefix_bits = 0;
 
 		for index in AddressPath::new(address) {
-			if let Some(child) = &self.children[usize::from(index)] {
+			if let Some(child) = &self.children[index] {
 				current = child;
 				prefix_bits += 4;
 			} else {
@@ -87,7 +48,7 @@ impl AddressTree {
 		}
 	}
 
-	fn record_trusted_path(&mut self, mut path: impl Iterator<Item = u8>) {
+	fn record_trusted_path(&mut self, mut path: impl Iterator<Item = NodeIndex>) {
 		self.trusted_count += 1;
 
 		if self.spam_count == 0 {
@@ -95,21 +56,21 @@ impl AddressTree {
 		}
 
 		if let Some(next) = path.next() {
-			if let Some(child) = &mut self.children[usize::from(next)] {
+			if let Some(child) = &mut self.children[next] {
 				child.record_trusted_path(path);
 			}
 		}
 	}
 
 	pub fn record_trusted(&mut self, address: Address) {
-		self.record_trusted_path(AddressPath::new(address));
+		self.record_trusted_path(AddressPath::new(address))
 	}
 
-	fn record_spam_path(&mut self, mut path: impl Iterator<Item = u8>) {
+	fn record_spam_path(&mut self, mut path: impl Iterator<Item = NodeIndex>) {
 		self.spam_count += 1;
 
 		if let Some(next) = path.next() {
-			self.children[usize::from(next)].get_or_insert_with(|| {
+			self.children[next].get_or_insert_with(|| {
 				Box::new(AddressTree::new())
 			}).record_spam_path(path);
 		}

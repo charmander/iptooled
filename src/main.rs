@@ -2,6 +2,7 @@
 #![feature(process_exitcode_placeholder)]
 #![feature(try_blocks)]
 
+mod address;
 mod tree;
 
 use std::convert::{From, TryInto};
@@ -17,7 +18,8 @@ use tokio::net::UnixListener;
 use tokio::runtime;
 use tokio::task;
 
-use self::tree::{Address, AddressTree};
+use self::address::Address;
+use self::tree::AddressTree;
 
 #[derive(Clone, Debug)]
 struct UsageError(&'static str);
