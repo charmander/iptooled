@@ -8,7 +8,7 @@ mod tree;
 use std::convert::{From, TryInto};
 use std::env;
 use std::error::Error;
-use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fmt;
 use std::path::Path;
 use std::process::ExitCode;
@@ -18,7 +18,7 @@ use tokio::net::UnixListener;
 use tokio::runtime;
 use tokio::task;
 
-use self::address::Address;
+use self::address::{ADDRESS_BYTES, Address};
 use self::tree::AddressTree;
 
 #[derive(Clone, Debug)]
@@ -36,6 +36,26 @@ fn show_usage() {
 	eprintln!("Usage: iptooled <socket-path>");
 }
 
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+enum RequestType {
+	Query,
+	Trust,
+	Spam,
+}
+
+impl RequestType {
+	fn from(code: u8) -> Option<Self> {
+		Some(
+			match code {
+				0 => Self::Query,
+				1 => Self::Trust,
+				2 => Self::Spam,
+				_ => return None,
+			}
+		)
+	}
+}
+
 #[derive(Clone, Debug)]
 enum Request {
 	Query(Address),
@@ -45,7 +65,8 @@ enum Request {
 
 #[derive(Debug)]
 enum ReadError {
-	FormatError([u8; 17]),
+	End,
+	FormatError(Vec<u8>),
 	IoError(io::Error),
 }
 
@@ -64,25 +85,34 @@ impl From<io::Error> for ReadError {
 }
 
 async fn read_request(mut source: impl io::AsyncRead + Unpin) -> Result<Request, ReadError> {
-	let mut buf = [0; 17];
-	source.read_exact(&mut buf).await?;
+	let mut buf = [0; 1 + ADDRESS_BYTES];
+	let r = source.read(&mut buf).await?;
 
-	let request_type = buf[0];
+	if r == 0 {
+		return Err(ReadError::End);
+	}
+
+	let request_type = RequestType::from(buf[0])
+		.ok_or_else(|| ReadError::FormatError(buf[..r].to_vec()))?;
+
+	if r < buf.len() {
+		source.read_exact(&mut buf[r..]).await?;
+	}
+
 	let address = Address(buf[1..].try_into().unwrap());
 
 	Ok(
 		match request_type {
-			0 => Request::Query(address),
-			1 => Request::Trust(address),
-			2 => Request::Spam(address),
-			_ => Err(ReadError::FormatError(buf))?,
+			RequestType::Query => Request::Query(address),
+			RequestType::Trust => Request::Trust(address),
+			RequestType::Spam => Request::Spam(address),
 		}
 	)
 }
 
-async fn async_main(socket_path: &OsStr) -> Result<(), Box<dyn Error>> {
+async fn async_main(socket_path: OsString) -> Result<(), Box<dyn Error>> {
 	let tree = Rc::new(AddressTree::new());
-	let mut listener = UnixListener::bind(Path::new(socket_path))?;
+	let mut listener = UnixListener::bind(Path::new(&socket_path))?;
 
 	loop {
 		let mut tree = tree.clone();
@@ -99,7 +129,7 @@ async fn async_main(socket_path: &OsStr) -> Result<(), Box<dyn Error>> {
 			};
 
 		task::spawn_local(async move {
-			let err: Result<!, ReadError> = try {
+			let result: Result<!, ReadError> = try {
 				loop {
 					match read_request(&mut client).await? {
 						Request::Query(address) => {
@@ -123,7 +153,12 @@ async fn async_main(socket_path: &OsStr) -> Result<(), Box<dyn Error>> {
 				}
 			};
 
-			eprintln!("client error: {}", err.err().unwrap());
+			match result {
+				Ok(_) => unreachable!(),
+				Err(ReadError::End) => {},
+				Err(err) => eprintln!("client error: {}", err),
+			}
+
 			// TODO: dropping the socket seems to close it, but is that reliable?
 		});
 	}
@@ -146,7 +181,12 @@ fn main() -> ExitCode {
 				.basic_scheduler()
 				.build()?;
 
-		single_threaded_runtime.block_on(async_main(&socket_path))?
+		let local = task::LocalSet::new();
+
+		local.block_on(
+			&mut single_threaded_runtime,
+			async_main(socket_path)
+		)?
 	};
 
 	match result {
