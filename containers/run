@@ -9,12 +9,14 @@ fi
 . containers/common.sh
 
 mkdir -p \
-	containers/mounts/run/iptooled
+	containers/mounts/run/iptooled \
+	containers/mounts/persist/iptooled
 
 exec_docker \
 	--runtime=runc \
 	--network=none \
 	--mount "type=bind,ro,$(expand_src target/debug/iptooled),dst=/build/target/debug/iptooled" \
 	--mount "type=bind,$(expand_src containers/mounts/run/iptooled),dst=/run/iptooled" \
+	--mount "type=bind,$(expand_src containers/mounts/persist/iptooled),dst=/var/iptooled" \
 	--workdir /build \
 	alpine:3.10 target/debug/iptooled "$@"

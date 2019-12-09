@@ -5,6 +5,7 @@
 mod address;
 mod tree;
 
+use std::cell::RefCell;
 use std::convert::{From, TryInto};
 use std::env;
 use std::error::Error;
@@ -13,13 +14,15 @@ use std::fmt;
 use std::path::Path;
 use std::process::ExitCode;
 use std::rc::Rc;
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixListener;
+use tokio::fs::OpenOptions;
+use tokio::io::{self, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::{UnixListener, UnixStream};
 use tokio::runtime;
+use tokio::sync::mpsc;
 use tokio::task;
 
 use self::address::{ADDRESS_BYTES, Address};
-use self::tree::AddressTree;
+use self::tree::{AddressTree, SerializedTreeOperation};
 
 #[derive(Clone, Debug)]
 struct UsageError(&'static str);
@@ -33,7 +36,7 @@ impl fmt::Display for UsageError {
 }
 
 fn show_usage() {
-	eprintln!("Usage: iptooled <socket-path>");
+	eprintln!("Usage: iptooled <persist-path> <socket-path>");
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
@@ -110,13 +113,85 @@ async fn read_request(mut source: impl io::AsyncRead + Unpin) -> Result<Request,
 	)
 }
 
-async fn async_main(socket_path: OsString) -> Result<(), Box<dyn Error>> {
-	let tree = Rc::new(AddressTree::new());
+/// Persists writes to a file in a way that’s intended to not be able to accidentally produce a tree state that never existed. (For now, just by adding a checksum to every write, but there are more efficient options.)
+async fn persist(mut log: impl AsyncWrite + Unpin, mut writes: mpsc::Receiver<SerializedTreeOperation>) -> io::Result<()> {
+	while let Some(write) = writes.recv().await {
+		log.write(&write.bytes).await?;
+	}
+
+	Ok(())
+}
+
+async fn interact(tree: Rc<RefCell<AddressTree>>, mut writer: mpsc::Sender<SerializedTreeOperation>, mut client: UnixStream) {
+	let result: Result<!, ReadError> = try {
+		loop {
+			match read_request(&mut client).await? {
+				Request::Query(address) => {
+					let query_result = tree.borrow().query(&address);
+
+					client.write(&[
+						&query_result.trusted_count.to_be_bytes()[..],
+						&query_result.spam_count.to_be_bytes()[..],
+						&[query_result.prefix_bits][..],
+					].concat()).await?;
+				}
+				Request::Trust(address) => {
+					let write = tree.borrow_mut().record_trusted(address);
+					writer.try_send(write).unwrap();
+					client.write(&[0]).await?;
+				}
+				Request::Spam(address) => {
+					let write = tree.borrow_mut().record_spam(address);
+					writer.try_send(write).unwrap();
+					client.write(&[0]).await?;
+				}
+			}
+		}
+	};
+
+	match result {
+		Ok(_) => unreachable!(),
+		Err(ReadError::End) => {},
+		Err(err) => eprintln!("client error: {}", err),
+	}
+
+	// TODO: dropping the socket seems to close it, but is that reliable?
+}
+
+/// Generates random keys for SipHash.
+fn get_random_keys() -> Result<(u64, u64), getrandom::Error> {
+	let mut buf = [0; 16];
+	getrandom::getrandom(&mut buf)?;
+
+	let key0 = u64::from_ne_bytes(buf[0..8].try_into().unwrap());
+	let key1 = u64::from_ne_bytes(buf[8..16].try_into().unwrap());
+
+	Ok((key0, key1))
+}
+
+async fn async_main(persist_path: OsString, socket_path: OsString) -> Result<(), Box<dyn Error>> {
+	let mut keys = (0_u64, 0_u64);
+
+	let persist_log = match OpenOptions::new().write(true).create_new(true).open(&persist_path).await {
+		Ok(mut new_file) => {
+			eprintln!("Writing checksum key to new file {:?}", persist_path);
+			keys = get_random_keys()?;
+			new_file.write(&keys.0.to_be_bytes()).await?;
+			new_file.write(&keys.1.to_be_bytes()).await?;
+			new_file
+		}
+		err@Err(_) => err?,
+	};
+
+	let tree = Rc::new(RefCell::new(
+		AddressTree::new_with_keys(keys.0, keys.1)));
 	let mut listener = UnixListener::bind(Path::new(&socket_path))?;
+	let (writer, writes) = mpsc::channel(32);
+
+	task::spawn_local(persist(persist_log, writes));
 
 	loop {
-		let mut tree = tree.clone();
-		let mut client =
+		let client =
 			match listener.accept().await {
 				Err(err) => {
 					eprintln!("accept failed: {}", err);
@@ -128,46 +203,26 @@ async fn async_main(socket_path: OsString) -> Result<(), Box<dyn Error>> {
 				}
 			};
 
-		task::spawn_local(async move {
-			let result: Result<!, ReadError> = try {
-				loop {
-					match read_request(&mut client).await? {
-						Request::Query(address) => {
-							let query_result = tree.query(address);
-
-							client.write(&[
-								&query_result.trusted_count.to_be_bytes()[..],
-								&query_result.spam_count.to_be_bytes()[..],
-								&[query_result.prefix_bits][..],
-							].concat()).await?;
-						}
-						Request::Trust(address) => {
-							Rc::get_mut(&mut tree).unwrap().record_trusted(address);
-							client.write(&[0]).await?;
-						}
-						Request::Spam(address) => {
-							Rc::get_mut(&mut tree).unwrap().record_spam(address);
-							client.write(&[0]).await?;
-						}
-					}
-				}
-			};
-
-			match result {
-				Ok(_) => unreachable!(),
-				Err(ReadError::End) => {},
-				Err(err) => eprintln!("client error: {}", err),
-			}
-
-			// TODO: dropping the socket seems to close it, but is that reliable?
-		});
+		task::spawn_local(interact(tree.clone(), writer.clone(), client));
 	}
 }
 
 fn main() -> ExitCode {
 	let result: Result<(), Box<dyn Error>> = try {
+		let mut args = env::args_os();
+		let _ = args.next();
+
+		let persist_path =
+			match args.next() {
+				Some(path) => path,
+				None => {
+					show_usage();
+					Err(UsageError("Persist path is required"))?
+				},
+			};
+
 		let socket_path =
-			match env::args_os().nth(1) {
+			match args.next() {
 				Some(path) => path,
 				None => {
 					show_usage();
@@ -185,7 +240,7 @@ fn main() -> ExitCode {
 
 		local.block_on(
 			&mut single_threaded_runtime,
-			async_main(socket_path)
+			async_main(persist_path, socket_path)
 		)?
 	};
 

@@ -34,13 +34,13 @@ impl<T> IndexMut<NodeIndex> for NodeArray<T> {
 }
 
 /// An iterator over the `NodeIndex`es of the path to an address.
-pub struct AddressPath {
-	address: Address,
+pub struct AddressPath<'a> {
+	address: &'a Address,
 	path_index: usize,
 }
 
-impl AddressPath {
-	pub fn new(address: Address) -> Self {
+impl<'a> AddressPath<'a> {
+	pub fn new(address: &'a Address) -> Self {
 		Self {
 			address,
 			path_index: 0,
@@ -48,7 +48,7 @@ impl AddressPath {
 	}
 }
 
-impl Iterator for AddressPath {
+impl<'a> Iterator for AddressPath<'a> {
 	type Item = NodeIndex;
 
 	fn next(&mut self) -> Option<Self::Item> {
