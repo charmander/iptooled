@@ -211,6 +211,7 @@ async fn async_main(persist_path: OsString, socket_path: OsString) -> Result<(),
 				let key1 = u64::from_be_bytes(key_bytes[8..16].try_into().unwrap());
 
 				let mut initial_tree = AddressTree::new_with_keys(key0, key1);
+				let mut restored_count = 0;
 
 				loop {
 					let mut operation_bytes = [0; 1 + ADDRESS_BYTES + 8];
@@ -238,7 +239,11 @@ async fn async_main(persist_path: OsString, socket_path: OsString) -> Result<(),
 							calculated: applied_checksum,
 						})?
 					}
+
+					restored_count += 1;
 				}
+
+				eprintln!("Restored {} operations", restored_count);
 
 				let existing_file = reader.into_inner();
 
