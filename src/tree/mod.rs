@@ -141,7 +141,7 @@ impl AddressTree {
 		let mut path = AddressPath::new(&address);
 
 		loop {
-			current.trusted_count += 1;
+			current.trusted_count = current.trusted_count.saturating_add(1);
 
 			if prefix_bits >= MINIMUM_BITS && current.spam_count == 0 {
 				break;
@@ -163,7 +163,7 @@ impl AddressTree {
 		let mut path = AddressPath::new(&address);
 
 		loop {
-			current.spam_count += 1;
+			current.spam_count = current.spam_count.saturating_add(1);
 
 			if let Some(index) = path.next() {
 				current = current.get_or_create_child(index);
