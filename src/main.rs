@@ -15,14 +15,14 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::rc::Rc;
 use tokio::fs::OpenOptions;
-use tokio::io::{self, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{self, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ErrorKind};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::runtime;
 use tokio::sync::mpsc;
 use tokio::task;
 
 use self::address::{ADDRESS_BYTES, Address};
-use self::tree::{AddressTree, SerializedTreeOperation};
+use self::tree::{AddressTree, SerializedTreeOperation, TreeOperation};
 
 #[derive(Clone, Debug)]
 struct UsageError(&'static str);
@@ -86,6 +86,20 @@ impl From<io::Error> for ReadError {
 		Self::IoError(error)
 	}
 }
+
+#[derive(Clone, Debug)]
+struct ChecksumError {
+	stored: u64,
+	calculated: u64,
+}
+
+impl fmt::Display for ChecksumError {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		write!(f, "stored checksum {} didn’t match calculated checksum {}", self.stored, self.calculated)
+	}
+}
+
+impl Error for ChecksumError {}
 
 async fn read_request(mut source: impl io::AsyncRead + Unpin) -> Result<Request, ReadError> {
 	let mut buf = [0; 1 + ADDRESS_BYTES];
@@ -170,21 +184,70 @@ fn get_random_keys() -> Result<(u64, u64), getrandom::Error> {
 }
 
 async fn async_main(persist_path: OsString, socket_path: OsString) -> Result<(), Box<dyn Error>> {
-	let mut keys = (0_u64, 0_u64);
+	let (persist_log, initial_tree) =
+		match OpenOptions::new().write(true).create_new(true).open(&persist_path).await {
+			Ok(mut new_file) => {
+				eprintln!("Writing checksum key to new file {:?}", persist_path);
+				let keys = get_random_keys()?;
+				new_file.write(&keys.0.to_be_bytes()).await?;
+				new_file.write(&keys.1.to_be_bytes()).await?;
+				(new_file, AddressTree::new_with_keys(keys.0, keys.1))
+			},
+			Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+				eprintln!("Restoring tree from {:?}", persist_path);
 
-	let persist_log = match OpenOptions::new().write(true).create_new(true).open(&persist_path).await {
-		Ok(mut new_file) => {
-			eprintln!("Writing checksum key to new file {:?}", persist_path);
-			keys = get_random_keys()?;
-			new_file.write(&keys.0.to_be_bytes()).await?;
-			new_file.write(&keys.1.to_be_bytes()).await?;
-			new_file
-		}
-		err@Err(_) => err?,
-	};
+				// TODO: worth locking?
+				let existing_file =
+					OpenOptions::new()
+						.read(true)
+						.write(true)
+						.open(&persist_path)
+						.await?;
 
-	let tree = Rc::new(RefCell::new(
-		AddressTree::new_with_keys(keys.0, keys.1)));
+				let mut reader = BufReader::new(existing_file);
+				let mut key_bytes = [0; 16];
+				reader.read_exact(&mut key_bytes).await?;
+				let key0 = u64::from_be_bytes(key_bytes[0..8].try_into().unwrap());
+				let key1 = u64::from_be_bytes(key_bytes[8..16].try_into().unwrap());
+
+				let mut initial_tree = AddressTree::new_with_keys(key0, key1);
+
+				loop {
+					let mut operation_bytes = [0; 1 + ADDRESS_BYTES + 8];
+					let r = reader.read(&mut operation_bytes).await?;
+
+					if r == 0 {
+						break;
+					}
+
+					if r < operation_bytes.len() {
+						reader.read_exact(&mut operation_bytes[r..]).await?;
+					}
+
+					let checksum = u64::from_be_bytes(operation_bytes[1 + ADDRESS_BYTES..].try_into().unwrap());
+
+					let operation = TreeOperation::deserialize(operation_bytes[..1 + ADDRESS_BYTES].try_into().unwrap());
+
+					let applied = operation.apply(&mut initial_tree);
+
+					let applied_checksum = u64::from_be_bytes(applied.bytes[1 + ADDRESS_BYTES..].try_into().unwrap());
+
+					if checksum != applied_checksum {
+						Err(ChecksumError {
+							stored: checksum,
+							calculated: applied_checksum,
+						})?
+					}
+				}
+
+				let existing_file = reader.into_inner();
+
+				(existing_file, initial_tree)
+			},
+			Err(err) => Err(err)?,
+		};
+
+	let tree = Rc::new(RefCell::new(initial_tree));
 	let mut listener = UnixListener::bind(Path::new(&socket_path))?;
 	let (writer, writes) = mpsc::channel(32);
 

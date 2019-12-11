@@ -44,6 +44,10 @@ impl AddressPrefix {
 	pub fn bits(&self) -> u32 {
 		self.bits
 	}
+
+	pub fn first(self) -> Address {
+		self.first
+	}
 }
 
 /// A byte with the first n bits set.

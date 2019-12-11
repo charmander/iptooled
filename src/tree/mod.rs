@@ -19,7 +19,7 @@ pub struct QueryResult {
 
 #[derive(Clone, Debug)]
 #[must_use]
-enum TreeOperation {
+pub enum TreeOperation {
 	Trust(AddressPrefix),
 	Spam(Address),
 }
@@ -58,12 +58,19 @@ impl TreeOperation {
 		}
 	}
 
-	fn deserialize(buf: &[u8; 1 + ADDRESS_BYTES]) -> Self {
+	pub fn deserialize(buf: &[u8; 1 + ADDRESS_BYTES]) -> Self {
 		let address = Address(buf[1..].try_into().unwrap());
 
 		match buf[0] {
 			0 => Self::Spam(address),
 			bits => Self::Trust(address.prefix(bits.into())),
+		}
+	}
+
+	pub fn apply(self, tree: &mut AddressTree) -> SerializedTreeOperation {
+		match self {
+			Self::Trust(prefix) => tree.record_trusted(prefix.first()),
+			Self::Spam(address) => tree.record_spam(address),
 		}
 	}
 }
