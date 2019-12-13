@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+import argparse
+import ipaddress
+import sys
+
+
+argument_parser = argparse.ArgumentParser(
+	description='Combine text proxy lists for iptooled.',
+	allow_abbrev=False,
+)
+argument_parser.add_argument('inputs', metavar='INPUT', nargs='+', help='text files containing proxy networks, one per line')
+argument_parser.add_argument('--out', metavar='OUT', required=True, help='the output file')
+
+
+def is_sorted(iterable):
+	it = iter(iterable)
+	last = next(it, None)
+
+	for x in iterable:
+		if not (x >= last):
+			return False
+
+		last = x
+
+	return True
+
+
+def as_ipv6(network):
+	return (
+		ipaddress.IPv6Network((b'\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff' + network[0].packed, 96 + network.prefixlen))
+		if isinstance(network, ipaddress.IPv4Network) else network
+	)
+
+
+def main(args):
+	networks = []
+
+	for path in args.inputs:
+		with open(path, 'r') as f:
+			for line in f:
+				line = line.strip()
+
+				if line and not line.startswith('#'):
+					networks.append(as_ipv6(ipaddress.ip_network(line)))
+
+	networks = list(ipaddress.collapse_addresses(networks))
+	assert is_sorted(networks)
+
+	with open(args.out, 'xb') as f:
+		for network in networks:
+			f.write(network[0].packed + bytes([network.prefixlen]))
+
+
+if __name__ == '__main__':
+	main(argument_parser.parse_args())
