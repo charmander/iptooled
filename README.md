@@ -17,14 +17,14 @@ A request’s type is identified by its first byte.
 
 - [0, *address*×*address-bytes*]
 
-	Requests information about an address. The response is [*trusted*×4, *spam*×4, *bits*], where *bits* is the size of the prefix used to determine the result, *trusted* is the number of trusted hits with that prefix, and *spam* is the number of spam hits with that prefix. All values are big-endian and unsigned.
+    Requests information about an address. The response is [*trusted*×4, *spam*×4, *bits*], where *bits* is the size of the prefix used to determine the result, *trusted* is the number of trusted hits with that prefix, and *spam* is the number of spam hits with that prefix. All values are big-endian and unsigned.
 
 - [1, *address*×*address-bytes*]
 
-	Marks an address as trusted. The response is [0] for success, [1] for failure.
+    Marks an address as trusted. The response is [0] for success, [1] for failure.
 
 - [2, *address*×*address-bytes*]
 
-	Marks an address as spam. The response is [0] for success, [1] for failure.
+    Marks an address as spam. The response is [0] for success, [1] for failure.
 
 It’s okay to send multiple requests without waiting for a response; the responses will come back in order.
