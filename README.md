@@ -23,6 +23,8 @@ Query:
 
 - when a user signs up
 
+(The user ids provided to iptooled can, and often should, be keyed-hashed or encrypted versions of actual user ids.)
+
 
 ## Protocol
 

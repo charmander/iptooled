@@ -1,16 +1,18 @@
-use std::collections::{hash_map, BTreeMap, HashMap, VecDeque};
-use std::convert::TryFrom;
-use std::time;
+use std::collections::{btree_map, hash_map, BTreeMap, HashMap};
 
 use super::address::{ADDRESS_BITS, Address, AddressPrefix};
+use super::time_list::{CoarseDuration, CoarseSystemTime, TimeList};
 
 const ENTRIES_PER_USER: u8 = 5;
 
 /// The smallest shared prefix size considered meaningful. For IPv6, at least 4, because the entire internet is in 2000::/3.
 const PREFIX_BITS_MINIMUM: u8 = 12;
 
+/// The time before an entry’s user information is discarded, making the effective number of entries per user `ENTRIES_PER_USER * ADDRESS_EXPIRY_HOURS / USER_EXPIRY_HOURS`.
+const USER_EXPIRY_HOURS: CoarseDuration = CoarseDuration { hours: 24 * 30 };
+
 /// The time before an entry stops being considered useful and is discarded.
-const EXPIRY_HOURS: CoarseDuration = CoarseDuration { hours: 24 * 365 * 2 };
+const ADDRESS_EXPIRY_HOURS: CoarseDuration = CoarseDuration { hours: 24 * 365 * 2 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct User(u32);
@@ -21,12 +23,7 @@ impl User {
 	}
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct CoarseDuration {
-	hours: u16,  // 2^16 hours is 7.5 years
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SpamStats {
 	pub trusted_users: u32,
 	pub spam_users: u32,
@@ -45,45 +42,33 @@ pub struct QueryResult {
 	pub prefix_bits: u8,
 }
 
-#[derive(Clone, Debug)]
-enum TimeError {
-	Overflow(time::Duration),
-	LongJumpBackwards(time::SystemTimeError),
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum OperationType {
+	Trust,
+	Spam,
 }
 
 #[derive(Clone, Debug)]
-pub enum Operation {
-	Trust(Address, User),
-	Spam(Address, User),
-}
+pub struct Operation(OperationType, Address, User);
+
+#[derive(Clone, Debug)]
+struct AddressOperation(OperationType, Address);
 
 #[derive(Clone, Debug)]
 pub struct SpamTree {
 	users: HashMap<User, u8>,
 	counts: BTreeMap<AddressPrefix, SpamStats>,
-	window: VecDeque<Operation>,
-	time_reference: time::SystemTime,
+	user_window: TimeList<Operation>,
+	address_window: TimeList<AddressOperation>,
 }
 
 impl SpamTree {
-	pub fn new(time_reference: time::SystemTime) -> Self {
+	pub fn new() -> Self {
 		Self {
 			users: HashMap::new(),
 			counts: BTreeMap::new(),
-			window: VecDeque::new(),
-			time_reference,
-		}
-	}
-
-	fn translate_time(&self, time: time::SystemTime) -> Result<CoarseDuration, TimeError> {
-		match time.duration_since(self.time_reference) {
-			Ok(duration) =>
-				match u16::try_from(duration.as_secs() / 3600) {
-					Ok(hours) => Ok(CoarseDuration { hours }),
-					Err(_) => Err(TimeError::Overflow(duration)),
-				},
-			Err(err) if err.duration() < time::Duration::from_secs(3600) => Ok(CoarseDuration { hours: 0 }),
-			Err(err) => Err(TimeError::LongJumpBackwards(err)),
+			user_window: TimeList::new(USER_EXPIRY_HOURS),
+			address_window: TimeList::new(ADDRESS_EXPIRY_HOURS),
 		}
 	}
 
@@ -118,12 +103,35 @@ impl SpamTree {
 		}
 	}
 
-	fn advance(&mut self, now: CoarseDuration) {
-		unimplemented!()
+	fn advance(&mut self, now: CoarseSystemTime) {
+		for (Operation(type_, address, user), time) in self.user_window.trim(now) {
+			let entry = match self.users.entry(user) {
+				hash_map::Entry::Occupied(o) => o,
+				hash_map::Entry::Vacant(_) => panic!("User unexpectedly missing from map"),
+			};
+
+			if *entry.get() > 1 {
+				*entry.into_mut() -= 1;
+			} else {
+				entry.remove();
+			}
+
+			self.address_window.push(AddressOperation(type_, address), time);
+		}
+
+		for (AddressOperation(type_, address), _time) in self.address_window.trim(now) {
+			Self::unapply(&mut self.counts, &address, match type_ {
+				OperationType::Trust => |entry| {
+					entry.trusted_users -= 1;
+				},
+				OperationType::Spam => |entry| {
+					entry.spam_users -= 1;
+				},
+			});
+		}
 	}
 
-	pub fn query(&mut self, address: &Address, now: time::SystemTime) -> QueryResult {
-		let now = self.translate_time(now).unwrap();
+	pub fn query(&mut self, address: &Address, now: CoarseSystemTime) -> QueryResult {
 		self.advance(now);
 		self.query_stale(&address)
 	}
@@ -148,18 +156,11 @@ impl SpamTree {
 		Some(())
 	}
 
-	pub fn trust(&mut self, address: Address, user: User, now: time::SystemTime) -> Option<&Operation> {
-		let now = self.translate_time(now).unwrap();
-		self.advance(now);
-
-		self.try_increment(user)?;
-
+	fn apply(counts: &mut BTreeMap<AddressPrefix, SpamStats>, address: &Address, entry_update: impl Fn(btree_map::Entry<AddressPrefix, SpamStats>) -> ()) {
 		let mut prefix = address.prefix(ADDRESS_BITS);
 
 		loop {
-			self.counts.entry(prefix.clone())
-				.or_insert(SpamStats::EMPTY)
-				.trusted_users += 1;
+			entry_update(counts.entry(prefix.clone()));
 
 			if prefix.bits() == PREFIX_BITS_MINIMUM {
 				break;
@@ -167,12 +168,52 @@ impl SpamTree {
 
 			prefix.shorten();
 		}
-
-		self.window.push_back(Operation::Trust(address, user));
-		Some(self.window.back().unwrap())
 	}
 
-	pub fn spam(&mut self, address: Address, user: User, now: time::SystemTime) -> Option<&Operation> {
-		unimplemented!();
+	fn unapply(counts: &mut BTreeMap<AddressPrefix, SpamStats>, address: &Address, entry_update: fn(&mut SpamStats) -> ()) {
+		Self::apply(counts, address, |entry| {
+			let mut entry = match entry {
+				btree_map::Entry::Occupied(entry) => entry,
+				btree_map::Entry::Vacant(_) => panic!("Address unexpectedly missing from map"),
+			};
+
+			entry_update(entry.get_mut());
+
+			if entry.get() == &SpamStats::EMPTY {
+				entry.remove();
+			}
+		});
+	}
+
+	pub fn trust(&mut self, address: Address, user: User, now: CoarseSystemTime) {
+		self.advance(now);
+
+		if self.try_increment(user).is_none() {
+			return;
+		}
+
+		Self::apply(&mut self.counts, &address, |entry| {
+			entry
+				.or_insert(SpamStats::EMPTY)
+				.trusted_users += 1;
+		});
+
+		self.user_window.push(Operation(OperationType::Trust, address, user), now);
+	}
+
+	pub fn spam(&mut self, address: Address, user: User, now: CoarseSystemTime) {
+		self.advance(now);
+
+		if self.try_increment(user).is_none() {
+			return;
+		}
+
+		Self::apply(&mut self.counts, &address, |entry| {
+			entry
+				.or_insert(SpamStats::EMPTY)
+				.spam_users += 1;
+		});
+
+		self.user_window.push(Operation(OperationType::Spam, address, user), now);
 	}
 }

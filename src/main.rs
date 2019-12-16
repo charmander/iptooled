@@ -5,6 +5,7 @@
 
 mod address;
 mod protocol;
+mod time_list;
 mod tree;
 
 use std::cell::RefCell;
@@ -15,13 +16,13 @@ use std::fmt;
 use std::path::Path;
 use std::process::ExitCode;
 use std::rc::Rc;
-use std::time::SystemTime;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::runtime;
 use tokio::task;
 
 use self::protocol::{ReadError, Request, read_request};
+use self::time_list::CoarseSystemTime;
 use self::tree::SpamTree;
 
 #[derive(Clone, Debug)]
@@ -47,7 +48,7 @@ async fn interact(tree: Rc<RefCell<SpamTree>>, mut client: UnixStream) {
 		loop {
 			match read_request(&mut reader).await? {
 				Request::Query(address) => {
-					let query_result = tree.borrow_mut().query(&address, SystemTime::now());
+					let query_result = tree.borrow_mut().query(&address, CoarseSystemTime::now());
 					let mut response = [0; 9];
 
 					response[0..4].copy_from_slice(&query_result.stats.trusted_users.to_be_bytes());
@@ -57,11 +58,11 @@ async fn interact(tree: Rc<RefCell<SpamTree>>, mut client: UnixStream) {
 					client_write.write_all(&response).await?;
 				}
 				Request::Trust(address, user) => {
-					tree.borrow_mut().trust(address, user, SystemTime::now());
+					tree.borrow_mut().trust(address, user, CoarseSystemTime::now());
 					client_write.write_u8(0).await?;
 				}
 				Request::Spam(address, user) => {
-					tree.borrow_mut().spam(address, user, SystemTime::now());
+					tree.borrow_mut().spam(address, user, CoarseSystemTime::now());
 					client_write.write_u8(0).await?;
 				}
 			}
@@ -78,7 +79,7 @@ async fn interact(tree: Rc<RefCell<SpamTree>>, mut client: UnixStream) {
 }
 
 async fn async_main(socket_path: OsString) -> Result<(), Box<dyn Error>> {
-	let tree = Rc::new(RefCell::new(SpamTree::new(SystemTime::now())));
+	let tree = Rc::new(RefCell::new(SpamTree::new()));
 	let mut listener = UnixListener::bind(Path::new(&socket_path))?;
 
 	loop {
@@ -111,6 +112,11 @@ fn main() -> ExitCode {
 					Err(UsageError("Socket path is required"))?
 				},
 			};
+
+		if !args.next().is_none() {
+			show_usage();
+			Err(UsageError("Too many arguments"))?;
+		}
 
 		let mut single_threaded_runtime =
 			runtime::Builder::new()

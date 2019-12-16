@@ -40,25 +40,21 @@ impl AddressPrefix {
 
 	/// Shortens the prefix in place by one bit. Panics if it’s empty.
 	pub fn shorten(&mut self) {
-		self.bits = self.bits.checked_sub(1).expect("tried to shorten an empty AddressPrefix");
+		self.bits = self.bits.checked_sub(1)
+			.expect("tried to shorten an empty AddressPrefix");
 
 		let new_byte = self.bits / 8;
 		let new_bit = self.bits % 8;
-
-		if new_bit == 7 {
-			self.first.0[usize::from(new_byte + 1)] = 0;
-		} else {
-			self.first.0[usize::from(new_byte)] &= mask(new_bit);
-		}
+		self.first.0[usize::from(new_byte)] &= mask(new_bit);
 	}
 
 	pub fn is_prefix_of(&self, address: &Address) -> bool {
 		let Self { first, bits } = self;
-		let wholes = bits / 8;
+		let wholes = usize::from(bits / 8);
 		let remainder = bits % 8;
 
-		first.0[..usize::from(wholes)] == address.0[..usize::from(wholes)]
-			&& (remainder == 0 || (first.0[usize::from(wholes + 1)] ^ address.0[usize::from(wholes + 1)]) & mask(remainder) == 0)
+		first.0[..wholes] == address.0[..wholes]
+			&& (remainder == 0 || (first.0[wholes] ^ address.0[wholes]) & mask(remainder) == 0)
 	}
 }
 
