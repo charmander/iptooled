@@ -84,6 +84,7 @@ fn back_time_is_tail(list: TimeList<u32>) -> bool {
 	}) == tail
 }
 
+/// Checks that trimmed values are expired and that untrimmed values are unexpired.
 #[quickcheck]
 fn trimmed_values_are_expired(mut list: TimeList<u32>, step: CoarseGap) -> bool {
 	let limit = list.limit;
@@ -94,29 +95,18 @@ fn trimmed_values_are_expired(mut list: TimeList<u32>, step: CoarseGap) -> bool 
 
 	now += step.duration;
 
-	list.trim(now).all(|(_, mut time)| {
+	let expired_correct = list.trim(now).all(|(_, mut time)| {
 		time += limit;
 		time < now
-	})
-}
+	});
 
-#[quickcheck]
-fn untrimmed_values_are_unexpired(mut list: TimeList<u32>, step: CoarseGap) -> bool {
-	let limit = list.limit;
-	let mut now = match list.head_tail {
-		Some((_, tail)) => tail,
-		None => return true,
-	};
-
-	now += step.duration;
-
-	for _ in list.trim(now) {}
-
-	match list.head_tail {
+	let unexpired_correct = match list.head_tail {
 		Some((mut head, _)) => {
 			head += limit;
 			head >= now
 		},
 		None => true,
-	}
+	};
+
+	expired_correct && unexpired_correct
 }
