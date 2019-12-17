@@ -26,8 +26,8 @@ impl CoarseSystemTime {
 	/// Gets the time since a reference time, returning zero for times up to one hour later, panicking for times later than that, and panicking for times 2^16 or more hours earlier.
 	pub fn time_since(self, other: Self) -> CoarseDuration {
 		let hours =
-			if self.epoch_hours > other.epoch_hours {
-				if self.epoch_hours > other.epoch_hours + 1 {
+			if self.epoch_hours < other.epoch_hours {
+				if self.epoch_hours + 1 < other.epoch_hours {
 					panic!("Tried to get the time since a time more than an hour in the future");
 				}
 
