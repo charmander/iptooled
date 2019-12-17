@@ -14,11 +14,13 @@ const USER_EXPIRY_HOURS: CoarseDuration = CoarseDuration { hours: 24 * 30 };
 /// The time before an entry stops being considered useful and is discarded.
 const ADDRESS_EXPIRY_HOURS: CoarseDuration = CoarseDuration { hours: 24 * 365 * 2 };
 
+pub const USER_BYTES: usize = 4;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct User(u32);
 
 impl User {
-	pub const fn from_bytes(bytes: [u8; 4]) -> Self {
+	pub const fn from_bytes(bytes: [u8; USER_BYTES]) -> Self {
 		Self(u32::from_be_bytes(bytes))
 	}
 }

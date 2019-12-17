@@ -3,9 +3,7 @@ use std::fmt;
 use tokio::io::{self, AsyncRead, AsyncReadExt, BufReader, ErrorKind};
 
 use super::address::{ADDRESS_BYTES, Address};
-use super::tree::User;
-
-const USER_BYTES: usize = 4;
+use super::tree::{USER_BYTES, User};
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 enum RequestType {
