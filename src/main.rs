@@ -3,6 +3,10 @@
 #![feature(process_exitcode_placeholder)]
 #![feature(try_blocks)]
 
+#[cfg(test)]
+#[macro_use(quickcheck)]
+extern crate quickcheck_macros;
+
 mod address;
 mod protocol;
 mod time_list;

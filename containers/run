@@ -19,4 +19,4 @@ exec_docker \
 	--mount "type=bind,$(expand_src containers/mounts/run/iptooled),dst=/run/iptooled" \
 	--mount "type=bind,$(expand_src containers/mounts/persist/iptooled),dst=/var/iptooled" \
 	--workdir /build \
-	alpine:3.10 target/debug/iptooled "$@"
+	debian:buster-slim target/debug/iptooled "$@"

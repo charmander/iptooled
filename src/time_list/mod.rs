@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::ops::{AddAssign, Sub};
