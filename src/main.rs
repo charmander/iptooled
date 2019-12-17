@@ -2,6 +2,7 @@
 #![feature(const_int_conversion)]
 #![feature(process_exitcode_placeholder)]
 #![feature(try_blocks)]
+#![feature(type_ascription)]
 
 #[cfg(test)]
 #[macro_use(quickcheck)]
